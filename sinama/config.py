@@ -10,6 +10,8 @@ import os
 DISCOVERY_URLS = [
     "https://pub-ac69cf865ce145f8b4c1ed87dc2a9fb7.r2.dev/sdk-endpoint.json",
     "https://30update.s3.ir-thr-at1.arvanstorage.ir/sdk-endpoint.json",
+    # third source used by the official SDK bundled in 30nama.com
+    "https://raw.githubusercontent.com/EternalC0der/30nama/main/sdk-endpoint.json",
 ]
 FALLBACK_HOSTS = [
     {"location": "WORLD", "host": "https://world.hana-api.com/api/v2"},
@@ -45,7 +47,8 @@ MIN_GAP_SECONDS = 0.1
 BACKOFF_SECONDS = [1.0, 3.0]
 MAX_RETRY_AFTER = 10.0
 # Never retried: side effects or polling where a retry would do harm.
-NO_RETRY = {"observer", "logout", "qrlogin_login", "login", "otp", "otp_verify", "register", "user_list"}
+NO_RETRY = {"observer", "logout", "qrlogin_login", "qrlogin_auth", "login", "otp", "otp_verify", "register",
+            "user_list", "voucher", "shaparak", "paypal"}
 
 # Environment variables.
 ENV_TOKEN = "SINAMA_TOKEN"
@@ -55,3 +58,15 @@ ENV_EMAIL = "site_30NAMA_email"
 ENV_PASSWORD = "site_30NAMA_password"
 
 DEFAULT_SESSION_FILE = os.path.join(os.path.expanduser("~"), ".sinama", "session.json")
+
+# Website API (interface.30nama.com/api/v1), from the 30nama.com bundle. Separate sessions.
+WEB_HOST = "https://interface.30nama.com/api/v1"
+WEB_API_KEY = "YygufGCvFgYR3g9sjD92Ct5ZSx7SJs4JXpuCeTS24nWAszaL4u3qCDZRULpejmzF"
+WEB_APP_VERSION = "2.0.0"
+WEB_PLATFORM = "Website"
+WEB_USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Safari/537.36"
+# Measured: ~30 requests in under a minute earned a ~4 minute Cloudflare block on this host.
+WEB_MIN_GAP_SECONDS = 2.5
+ENV_WEB_TOKEN = "SINAMA_WEB_TOKEN"
+ENV_WEB_SESSION_FILE = "SINAMA_WEB_SESSION_FILE"
+DEFAULT_WEB_SESSION_FILE = os.path.join(os.path.expanduser("~"), ".sinama", "web-session.json")

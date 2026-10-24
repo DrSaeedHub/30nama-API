@@ -200,9 +200,49 @@ class Client:
         finally:
             self.clear_session()
 
-    def plans(self):
-        """Subscription plans and prices: {discount, plans: [{id, type, title, features, prices}]}."""
-        return self.get("plans")
+    def plans(self, gateway=None, discount_code=None):
+        """Subscription plans and prices: {discount, plans: [{id, type, title, features, prices}]}.
+
+        gateway: e.g. "paypal" returns that gateway's plan ids/prices; discount_code is
+        validated into `discount: {use_discount, discount_error}`.
+        """
+        return self.get("plans", gateway=gateway, discount_code=discount_code)
+
+    def offer(self):
+        """Current promotional offer (result is null when there is none)."""
+        return self.get("offer")
+
+    def checks(self, key=None):
+        """SDK `checks` action (purpose undocumented; answers success with a null result)."""
+        return self.get("checks", key=key)
+
+    def endpoints(self):
+        """The API's own host list: [{location, host}] (bare JSON list, used for discovery)."""
+        return self.get("endpoint")
+
+    def qr_approve(self, code):
+        """Approve another device's QR login code with this session (qrlogin_auth), exactly what
+        opening 30nama.com/auth/<code> does. Works for v2 TV codes and website (v1) codes."""
+        self._require_login("qrlogin_auth")
+        env = self.call("qrlogin_auth", auth_code=code)
+        if not env.get("success") and str(env.get("msg") or "").lower() in ("wrong code", "code expired"):
+            raise QRCodeExpired(env.get("msg"), env.get("status"), env, "qrlogin_auth")
+        return check("qrlogin_auth", env)
+
+    def voucher(self, voucher_code):
+        """Redeem a voucher on this account (INVALID_VOUCHER_CODE for a bad code). Never retried."""
+        self._require_login("voucher")
+        return check("voucher", self.call("voucher", voucher_code=voucher_code))
+
+    def payment_shaparak(self, plan_id, discount_code=None):
+        """Create a Shaparak (Iranian bank gateway) payment for a plan. Not exercised by tests."""
+        self._require_login("shaparak")
+        return self.get("shaparak", retry=False, plan_id=plan_id, discount_code=discount_code)
+
+    def payment_paypal(self, plan_id, discount_code=None):
+        """Create a PayPal payment for a plan (ids from plans(gateway="paypal")). Not exercised by tests."""
+        self._require_login("paypal")
+        return self.get("paypal", retry=False, plan_id=plan_id, discount_code=discount_code)
 
     # ------------------------------------------------------------------ browse
     def home(self):

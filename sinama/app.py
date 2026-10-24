@@ -9,6 +9,8 @@
     sinama single ID | stream ID | downloads ID | subtitle URL
     sinama mylist [watchlist|favorite] | continue
     sinama call ACTION [key=value ...]   any action, raw envelope
+    sinama web-login              link a website (v1) session using the saved v2 session
+    sinama web PATH [key=value ...]      any website-API path, e.g. `web comment/id/8863/page/1/type/comment/orderby/date`
 """
 import argparse
 import json
@@ -16,6 +18,7 @@ import sys
 
 from . import screens
 from .client import Client
+from .web import WebClient
 from .errors import CaptchaRequired, SinamaError
 from .helpers import title
 
@@ -57,6 +60,10 @@ def build_parser():
     p = sub.add_parser("call")
     p.add_argument("action")
     p.add_argument("params", nargs="*", help="key=value")
+    sub.add_parser("web-login")
+    p = sub.add_parser("web")
+    p.add_argument("path")
+    p.add_argument("params", nargs="*", help="key=value")
     return ap
 
 
@@ -86,6 +93,14 @@ def run(c, a):
         return 0
     if cmd == "call":
         _print(c.call(a.action, **dict(kv.split("=", 1) for kv in a.params)))
+        return 0
+    if cmd == "web-login":
+        w = WebClient()
+        u = w.qr_login(approve_with=c)
+        sys.stderr.write("website session for %s saved to %s\n" % (u.get("username", "?"), w.store.path))
+        return 0
+    if cmd == "web":
+        _print(WebClient().call(a.path, **dict(kv.split("=", 1) for kv in a.params)))
         return 0
     simple = {"whoami": c.user, "test": c.test, "menu": c.menu, "plans": c.plans, "logout": c.logout}
     if cmd in simple:

@@ -13,7 +13,7 @@ import os
 import pytest
 import requests
 
-from sinama import ApiError, LoginRequired, direct, player, screens
+from sinama import ApiError, LoginRequired, NotFound, direct, player, screens
 
 pytestmark = [pytest.mark.live, pytest.mark.auth]
 
@@ -27,13 +27,27 @@ def test_user(auth):
 
 @pytest.fixture(scope="module")
 def streamable(auth, sample):
-    """A movie and a series the account can stream, with their stream results."""
+    """A movie and a series that really stream, with their stream results.
+
+    Home rows can list titles flagged stream:true whose stream answers "M3U8 file not found",
+    so candidates are tried in order.
+    """
     out = {}
     for kind in ("movie", "series"):
-        try:
-            out[kind] = (sample[kind], auth.stream(sample[kind]))
-        except ApiError as e:
-            pytest.skip("stream refused (%s): the account needs a streaming plan" % e)
+        errors = []
+        for pid in sample["candidates"][kind]:
+            try:
+                st = auth.stream(pid)
+            except NotFound as e:  # no HLS file for this title
+                errors.append("%s: %s" % (pid, e))
+                continue
+            except ApiError as e:  # e.g. no streaming plan
+                pytest.skip("stream refused (%s)" % e)
+            if player.items(st):
+                out[kind] = (pid, st)
+                break
+        else:
+            pytest.skip("no streamable %s among home candidates: %s" % (kind, "; ".join(errors)))
     return out
 
 
@@ -68,9 +82,9 @@ def test_subtitle_from_stream(auth, streamable):
     pytest.skip("no subtitles on the sampled titles")
 
 
-def test_download(auth, sample):
+def test_download(auth, streamable):
     try:
-        raw = auth.download(sample["movie"])
+        raw = auth.download(streamable["movie"][0])
     except ApiError as e:
         pytest.skip("download refused (%s): the account needs a download plan" % e)
     assert isinstance(raw["download"], list)
@@ -81,9 +95,10 @@ def test_download(auth, sample):
     assert any(x["meta"]["height"] for x in links)
 
 
-def test_download_series(auth, sample):
+def test_download_series(auth, streamable):
+    sid = streamable["series"][0]
     try:
-        raw = auth.download(sample["series"])
+        raw = auth.download(sid)
     except ApiError as e:
         pytest.skip("download refused (%s)" % e)
     # {"seasons": [1, 2], "total_seasons": 2, "download": {"s1": [{season, quality, link: [{dl, episode}]}]}}
@@ -92,7 +107,7 @@ def test_download_series(auth, sample):
     assert {"season", "quality", "link"} <= set(group) and {"dl", "episode"} <= set(group["link"][0])
     links = direct.extract(raw)
     assert links and all(x["meta"]["season"] and x["meta"]["episode"] for x in links)
-    items = player.items(auth.stream(sample["series"]))
+    items = player.items(auth.stream(sid))
     assert direct.attach(items, links, True) > 0
     assert any(q["direct"] for q in player.qualities(items[0]))
 

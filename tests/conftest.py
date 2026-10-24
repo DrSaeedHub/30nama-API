@@ -42,7 +42,7 @@ class FakeHTTP:
         self.handler = handler or (lambda a, d, h: FakeResponse(200, ok({})))
 
     def post(self, url, data=None, headers=None, timeout=None):
-        action = url.split("/action/", 1)[1]
+        action = url.split("/action/", 1)[1] if "/action/" in url else url
         self.calls.append({"url": url, "action": action, "data": dict(data or {}), "headers": dict(headers or {})})
         r = self.handler(action, dict(data or {}), headers or {})
         r.headers = _Headers(r.headers)
@@ -84,6 +84,17 @@ def offline(fake):
     return c
 
 
+@pytest.fixture
+def web_offline(fake):
+    """WebClient wired to FakeHTTP, zero pacing/backoff, logged in."""
+    from sinama import WebClient, WebTransport
+    from sinama.api import Scheduler
+    t = WebTransport(session=fake, scheduler=Scheduler(min_gap=0), backoff=[0, 0])
+    w = WebClient(transport=t, store=MemoryStore(), token="WEBTOKEN")
+    w.user_info = {"userid": 7, "username": "tester"}
+    return w
+
+
 # ---------------------------------------------------------------- live
 def _saved_token():
     if os.environ.get(C.ENV_TOKEN):
@@ -119,6 +130,7 @@ def auth():
 def sample(live):
     """A streamable movie and series id from the live home page."""
     h = live.home_stream()
-    movie = next(p for p in h["movies"]["posts"] if p["options"]["stream"])
-    series = next(p for p in h["series"]["posts"] if p["options"]["stream"])
-    return {"movie": movie["id"], "series": series["id"]}
+    movies = [p["id"] for p in h["movies"]["posts"] if p["options"]["stream"]]
+    series = [p["id"] for p in h["series"]["posts"] if p["options"]["stream"]]
+    # `candidates`: a title flagged stream:true can still answer "M3U8 file not found" (seen live).
+    return {"movie": movies[0], "series": series[0], "candidates": {"movie": movies[:8], "series": series[:8]}}

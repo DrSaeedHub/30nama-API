@@ -161,7 +161,7 @@ class Transport:
         except requests.RequestException as e:
             raise TransportError("%s: %s" % (name, e)) from e
         text = r.text
-        if raw:
+        if raw and r.status_code != 429:
             if r.status_code >= 400:
                 raise TransportError("%s: HTTP %s" % (name, r.status_code), status=r.status_code, body=text)
             return text
@@ -171,32 +171,38 @@ class Transport:
                     "http_status": r.status_code}
         try:
             env = r.json()
+            parsed = True
         except ValueError:
-            env = None
-        if env is None:
+            env, parsed = None, False
+        if not parsed:
             ra = r.headers.get("retry-after")
             try:
-                ra = min(float(ra), C.MAX_RETRY_AFTER) if ra else 0.0
+                ra = float(ra) if ra else 0.0
             except ValueError:
                 ra = 0.0
             if r.status_code == 429 or "error code: 1015" in text:
-                raise RateLimited("%s: rate limited (429)" % name, status=r.status_code, retry_after=ra, body=text[:500])
+                # A block longer than MAX_RETRY_AFTER (the v1 host hands out ~4 min) is not worth waiting out.
+                raise RateLimited("%s: rate limited (429), retry after %ss" % (name, int(ra)), status=r.status_code,
+                                  retry=ra <= C.MAX_RETRY_AFTER, retry_after=ra, body=text[:500])
             if any(g in text for g in _GUARDS):
                 raise Blocked("%s: server guard %s" % (name, next(g for g in _GUARDS if g in text)),
                               status=r.status_code, body=text[:500])
+            if r.status_code == 404:
+                # v1 answers unknown actions with a plain-text "404 Not Found".
+                return {"status": 404, "success": False, "error": True, "msg": text.strip()[:80] or "404 Not Found",
+                        "result": None, "http_status": 404}
             if text.lstrip().startswith("<") and r.status_code in (403, 503) and "challenge" in text.lower():
                 raise Blocked("%s: Cloudflare challenge (HTTP %s)" % (name, r.status_code),
                               status=r.status_code, body=text[:500])
             prefix = "5xx " if r.status_code >= 500 else ""
             raise TransportError("%sbad json from %s (HTTP %s)" % (prefix, name, r.status_code),
                                  status=r.status_code, retry_after=ra, body=text[:500])
-        if isinstance(env, dict) and "success" not in env:
-            # A few actions (captcha) answer bare JSON without the envelope.
+        if not (isinstance(env, dict) and "success" in env):
+            # A few actions answer bare JSON without the envelope: captcha (object), endpoint (list).
             env = {"status": r.status_code, "success": r.ok, "error": not r.ok, "msg": None, "result": env}
-        if isinstance(env, dict) and "results" in env and "result" not in env:
+        if "results" in env and "result" not in env:
             env["result"] = env.pop("results")  # 404 envelopes spell it "results"
-        if isinstance(env, dict):
-            env.setdefault("http_status", r.status_code)
+        env.setdefault("http_status", r.status_code)
         return env
 
     # ---------- scheduled, retried calls ----------

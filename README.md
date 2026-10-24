@@ -1,8 +1,13 @@
 # sinama: Python client for the 30nama API
 
-Unofficial, single-package (monolithic) Python library for the hana-api v2 RPC API that the
-official 30nama TV clients use. Its module layout mirrors
-[msharifi99/30nama-tizenos](https://github.com/msharifi99/30nama-tizenos)'s `tizen-app/js/`.
+Unofficial, single-package (monolithic) Python library for both 30nama APIs:
+
+- `sinama.Client`: the hana-api v2 RPC API used by the official TV apps and SDK (browse, search,
+  stream, download, progress, lists, notifications, plans). Its module layout mirrors
+  [msharifi99/30nama-tizenos](https://github.com/msharifi99/30nama-tizenos)'s `tizen-app/js/`.
+- `sinama.WebClient`: the website's own API (`interface.30nama.com/api/v1`), mapped from the
+  30nama.com JavaScript. It adds comments, ratings, collections, articles, top lists, box office,
+  schedule, people, profiles, requests, watch history and full search.
 
 > Not affiliated with 30nama. You need your own subscription for streaming and downloads.
 
@@ -29,6 +34,12 @@ to 30nama.com and approve it (codes last about 10 minutes). Alternatives: `SINAM
 or `Client().login(recaptcha_response=<token solved in a browser>)`, which reads
 `site_30NAMA_email` / `site_30NAMA_password` from the environment.
 
+A website (v1) session is separate; link one from the v2 session without another approval:
+
+```bash
+python -m sinama web-login
+```
+
 ## Use
 
 ```python
@@ -42,12 +53,20 @@ st = c.stream(8863)
 print(player.pick_url(player.items(st)[0], max_height=1080))
 ```
 
-Every action, its fields, responses and errors: [docs/API.md](docs/API.md).
+```python
+from sinama import WebClient
+
+web = WebClient()
+print(web.comments(8863, type="review")["total_comments"])
+print([p["title"] for p in web.toplist("top-movie-imdb")["posts"][:5]])
+```
+
+Every action and path, with fields, responses and errors: [docs/API.md](docs/API.md).
 
 ## Layout
 
 ```
-sinama/       the library (config, api, client, library, direct, player, screens, helpers, store, errors, app)
+sinama/       the library (config, api, client, web, library, direct, player, screens, helpers, store, errors, app)
 tests/        offline tests (fake HTTP) + live tests for every endpoint
 docs/         API reference
 tools/        probe.py: call any action and dump the raw JSON
@@ -60,6 +79,9 @@ python -m pytest                  # offline + live public; logged-in tests run w
 python -m pytest tests/test_offline.py   # no network
 python -m pytest -m "live and not auth"  # live, anonymous only
 ```
+
+The website API rate-limits hard (~30 requests a minute earns a ~4 minute block), so
+`WebTransport` spaces requests 2.5 s apart and `tests/test_web_live.py` takes a few minutes.
 
 Logged-in tests leave the account as they found it: list toggles are reverted, the progress
 report re-sends an existing resume point unchanged, and dismiss targets a title that isn't in

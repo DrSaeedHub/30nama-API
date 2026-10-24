@@ -1,9 +1,18 @@
-# 30nama API reference (hana-api v2)
+# 30nama API reference
 
-Unofficial reference for the RPC API behind the official 30nama TV clients, as used by
-[msharifi99/30nama-tizenos](https://github.com/msharifi99/30nama-tizenos) and verified live
-on 2026-10-23 from this repository's test suite. The API is undocumented and can change at
-any time. Each action lists the `sinama` method that wraps it.
+Unofficial reference for the two APIs behind 30nama, verified live from this repository's
+test suite. Both are undocumented and can change at any time.
+
+- **hana-api v2** (`world.hana-api.com/api/v2`): the RPC API of the official TV clients, as used
+  by [msharifi99/30nama-tizenos](https://github.com/msharifi99/30nama-tizenos) and by the official
+  `30nama-sdk`. Wrapped by `sinama.Client`. Most of this document.
+- **Website API v1** (`interface.30nama.com/api/v1`): what 30nama.com itself calls. It adds
+  comments, ratings, collections, articles, top lists, box office, schedule, people, profiles,
+  requests and full search. Wrapped by `sinama.WebClient`; see [Website API (v1)](#website-api-v1).
+
+The v2 action list was cross-checked on 2026-10-24 against the official SDK bundled in the
+30nama.com JavaScript (34 actions); the v1 paths come from the site's bundled `30nama-api`
+client (1.3.198, 93 methods). Each entry lists the `sinama` method that wraps it.
 
 > **Verification status.** Every action below was exercised live on 2026-10-23, anonymously and
 > with a logged-in (golden plan) session obtained by QR login. `register` and password `login`
@@ -12,7 +21,9 @@ any time. Each action lists the `sinama` method that wraps it.
 
 - [Transport](#transport) · [Envelope and errors](#envelope-and-errors) · [Rate limiting](#rate-limiting)
 - Actions: [Connection](#connection) · [Auth](#auth) · [Account](#account) · [Browse](#browse) ·
-  [Playback](#playback) · [Library](#library) · [Notifications](#notifications)
+  [Playback](#playback) · [Library](#library) · [Notifications](#notifications) ·
+  [Plans, offers, payments](#plans-offers-payments)
+- [Website API (v1)](#website-api-v1)
 - [Shared objects](#shared-objects) · [Python library](#python-library) · [CLI](#cli)
 
 ---
@@ -22,7 +33,7 @@ any time. Each action lists the `sinama` method that wraps it.
 | | |
 |---|---|
 | Base URL | `https://world.hana-api.com/api/v2` (WORLD) or `https://ir.kazem-api.com/api/v2` (IR) |
-| Discovery | `GET https://pub-ac69cf865ce145f8b4c1ed87dc2a9fb7.r2.dev/sdk-endpoint.json` or `GET https://30update.s3.ir-thr-at1.arvanstorage.ir/sdk-endpoint.json` → `[{"location": "WORLD", "host": "https://…/api/v2"}, …]` |
+| Discovery | `GET` any of `https://pub-ac69cf865ce145f8b4c1ed87dc2a9fb7.r2.dev/sdk-endpoint.json`, `https://30update.s3.ir-thr-at1.arvanstorage.ir/sdk-endpoint.json`, `https://raw.githubusercontent.com/EternalC0der/30nama/main/sdk-endpoint.json` (the SDK's third source) → `[{"location": "WORLD", "host": "https://…/api/v2"}, …]`; a reachable host also answers the [`endpoint`](#endpoint) action with the same list |
 | Request | `POST {base}/action/{name}`, body `application/x-www-form-urlencoded` (GET also works for parameterless actions) |
 | Response | JSON [envelope](#envelope-and-errors); a few exceptions are noted per action |
 
@@ -80,7 +91,8 @@ which the library implements in `sinama.api.Scheduler`:
 
 - at most **2** requests in flight, at least **100 ms** between request starts;
 - transient failures (429, 5xx, non-JSON, timeout) are retried after **1 s** then **3 s**, honouring `Retry-After` (capped at 10 s); a 429 pauses *all* requests;
-- never retried: `observer`, `logout`, `qrlogin_login`, `login`, `otp`, `otp_verify`, `register`, `user_list` (side effects, or polling where a retry is harmful).
+- never retried: `observer`, `logout`, `qrlogin_login`, `qrlogin_auth`, `login`, `otp`, `otp_verify`, `register`, `user_list`, `voucher`, `shaparak`, `paypal` (side effects, or polling where a retry is harmful);
+- a 429 whose `Retry-After` exceeds 10 s fails fast with `RateLimited(retry_after=…)` instead of retrying. The website API host hands out such blocks: about 30 requests in under a minute earned `Retry-After: 257` (an "Access denied … Cloudflare" page). `WebTransport` therefore spaces v1 requests 2.5 s apart.
 
 ---
 
@@ -151,6 +163,15 @@ Poll a QR code (the TV app polls every 5 s). Field: `auth_code`.
 The result has only the token; call [`user`](#user) for the profile. Never retried.
 → `Client.qr_check(code)` (one poll), `Client.qr_login(on_code=None, timeout=600, poll=5)` (blocking).
 
+### `qrlogin_auth`
+Private. Field: `auth_code`. **Approves** another device's QR code with this session, which is
+exactly what opening `30nama.com/auth/<code>` does in a signed-in browser. It accepts v2 TV codes
+and website (v1) codes alike, so a logged-in client can sign in a second client without anyone
+approving by hand. Answers `Authentication success.`; a bad code answers `Wrong Code`, and
+`Login Required` without a token. Never retried.
+→ `Client.qr_approve(code)` (raises `QRCodeExpired` for a wrong/expired code);
+`WebClient.qr_login(approve_with=client)` uses it.
+
 ### `logout`
 End the session server-side. Always `success: true` (`You have been logged out successfully`). Never retried. → `Client.logout()` (also clears the local session)
 
@@ -173,7 +194,10 @@ Private. Profile of the logged-in user:
 token, so treat the whole object as a secret. → `Client.user()`; cached as `Client.user_info`.
 
 ### `plans`
-Public. Subscription plans: `{discount: {use_discount, discount_error}, plans: [{id, type, title, order, features: [{title, enable}], prices: {"30"|"90"|"180": {id, note, price, currency, discount}}}]}`. → `Client.plans()`
+Public. Fields (optional): `gateway` (e.g. `paypal`: that gateway's plan ids and prices, which
+differ from the default Iranian-gateway ones), `discount_code` (validated into `discount`).
+Result: `{discount: {use_discount, discount_error}, plans: [{id, type, title, order, features: [{title, enable}], prices: {"30"|"90"|"180": {id, note, price, currency, discount}}}]}`.
+→ `Client.plans(gateway=None, discount_code=None)`. See also [Plans, offers, payments](#plans-offers-payments).
 
 ---
 
@@ -266,6 +290,10 @@ Needs a streaming plan. Fields: `post_id`, `free_stream` (optional).
    "options": {"intro_start": "00:03:48", "intro_end": "00:04:07", "previously_start": null,
                "previously_end": null, "end": "00:57:12", "token": "<42 chars>"}}]}
 ```
+
+A title can be flagged `options.stream: true` and still answer `success: false`,
+`msg: "M3U8 file not found"` (seen live on 2026-10-24 for a home-row movie; the library raises
+`NotFound`), so try the next title rather than assuming a plan problem.
 
 A movie has one `hls` item whose `info` is just `{file_id}` and whose `options` has only
 `intro_start`, `intro_end`, `token`; a series has one item per episode (62 for a 5-season
@@ -383,6 +411,161 @@ Private. Field: `notification_id`. Not exercised with a real id (the account had
 
 ---
 
+## Plans, offers, payments
+
+Actions found in the official SDK. The payment ones create real transactions, so the test
+suite only checks their request format offline.
+
+### `endpoint`
+Public. The API's own host list. **Not enveloped**: the body is a bare JSON list
+`[{"location": "WORLD", "host": "https://world.hana-api.com/api/v2"}, {"location": "IR", …}]`. → `Client.endpoints()`
+
+### `offer`
+Public. Current promotional offer; `msg: "Offer"`, `result: null` when none. → `Client.offer()`
+
+### `checks`
+Public. Field: `key`. Purpose undocumented by the SDK; answers `success: true`, `result: null`. → `Client.checks(key=None)`
+
+### `voucher`
+Private. Field: `voucher_code`. Redeems a voucher on the account. A bad code answers
+`INVALID_VOUCHER_CODE`. Never retried. → `Client.voucher(code)`
+
+### `shaparak` / `paypal`
+Private. Fields: `plan_id`, `discount_code`. Start a payment through the Iranian bank gateway or
+PayPal (use the plan ids of `plans(gateway="paypal")` for PayPal). Not exercised live.
+→ `Client.payment_shaparak(plan_id, discount_code=None)`, `Client.payment_paypal(plan_id, discount_code=None)`
+
+### `stream_servers`
+Listed in the SDK but **removed** from the server: `404 Not Found` with or without a session. Not wrapped.
+
+---
+
+## Website API (v1)
+
+`https://interface.30nama.com/api/v1/action/{path}`: the API behind 30nama.com, wrapped by
+`sinama.WebClient`. Mapped from the site's bundled client and verified live on 2026-10-24.
+
+| | |
+|---|---|
+| Request | `POST {base}/action/{path}`, form-urlencoded body. **Parameters are mostly path segments**: `single/id/8863`, `comment/id/8863/page/1/type/comment/orderby/date` |
+| Headers | `c-api-key: YygufGCvFgYR3g9s…pejmzF` (the website key; full value in `sinama/config.py`), `c-useragent`, `c-app-version: 2.0.0`, `c-platform: Website`, `c-token` (only when logged in) |
+| Envelope | `{success, msg, result, …}` like v2, but `msg` is Persian or null; `test` answers plain text `OK`; an unknown path answers plain-text `404 Not Found` (HTTP 404) |
+| Links | Some URLs in results use `link://`, `linkDownload://`, `linkStream://` placeholders, which the client rewrites to `https://` (`WebTransport` does this) |
+| Sessions | Separate from v2: a v2 token is rejected and vice versa. Log in with `qrcode/` + approval, or link one from a v2 session with `WebClient.qr_login(approve_with=Client())` |
+| Rate limit | Much stricter than v2: ~30 requests/minute earned a ~4-minute Cloudflare block. `WebTransport` waits 2.5 s between requests |
+
+Errors (mapped by `sinama.web.web_check`):
+
+| `msg` | Meaning | Exception |
+|---|---|---|
+| `ابتدا وارد حساب خود شوید` | log in first | `LoginRequired` |
+| `Invalid Data` | e.g. `user`, `is_new_user` without a token | `ApiError` (methods refuse locally first) |
+| `چنین پستی وجود ندارد` | no such post | `NotFound` |
+| `پارامتر های کپچا نامعتبر است` | invalid captcha (loginV2, registerV2, send_otp, request) | `CaptchaRequired` |
+| `کد فعالسازی اشتباه است` | wrong QR/activation code | `QRCodeExpired` |
+| `امکان تماشای آنلاین برای شما وجود ندارد` | you can't stream (no session or plan) | `ApiError` |
+| plain-text `404 Not Found` | unknown path | `NotFound` |
+
+### Paths
+
+`{x}` is a path segment; *form* lists body fields. "Live" marks what the test suite exercises
+against the real API (✓), only up to its error answer (err), or offline only (offline).
+
+**Session and account**
+
+| Path | Form | Method | Live |
+|---|---|---|---|
+| `test` | | `test()` → `True` | ✓ |
+| `qrcode/` | | `qr_code()` → `{code, url}` | ✓ |
+| `qrlogin/code/{code}` | | `qr_check(code)`: pending → `success:false, msg:null`; approved → user with `usertoken` | ✓ |
+| `auth/code/{code}` | | `qr_approve(code)` (approve another device) | offline |
+| `loginV2` | `userlogin, userpassword, g-recaptcha-response` | `login(...)` | err |
+| `send_otp` / `verify_otp` | `userlogin, g-recaptcha-response` / `userlogin, code` | `send_otp`, `verify_otp` | offline |
+| `registerV2/`, `verifyV2`, `resendV2` | `userlogin, g-recaptcha-response` / `userlogin, code` / `userlogin` | `register`, `verify_registration`, `resend_verification` | offline |
+| `resetpasswordV2`, `verifyresetpasswordV2` | `userlogin, g-recaptcha-response` / `userlogin, code` | `reset_password`, `verify_reset_password` | offline |
+| `logout` | | `logout()` | offline |
+| `user` | | `user()`: username, useremail, usertype, expire, allowed_to_stream/download, avatar, gavatar, **active_sessions**, first/last name, description, social links, https_download, … | ✓ |
+| `update_user` | profile fields | `update_user(**fields)` | offline |
+| `update_user_password` | `current_password, new_password, confirm_new_password` | `update_password(current, new)` | offline |
+| `is_new_user`, `popup_users` | | `{is_new_user}`, `{is_loyal_user, is_new_user}` | ✓ |
+| `profile/user/{username}` | | `profile(username)` | ✓ |
+| `profile/user/{u}/list/{group}/page/{p}/orderby/{o}/order/{d}/type/{t}` | | `profile_list(...)` | offline |
+
+**Browse**
+
+| Path | Form | Method | Live |
+|---|---|---|---|
+| `menu` | | `menu()`: genres, categories, **toplists**, **boxoffice** | ✓ |
+| `main/` | | `home()`: featured, freestream, hero_section, new_releases, suggested, top, movies, series, anime, top10, quote, today_birthdays | ✓ |
+| `mainV2/` | | `home_v2()`: featured, hero_section, suggested, top10, news, review, faq, tweets, call_to_action | ✓ |
+| `main/streamonly/yes` | | `stream_home()` | ✓ |
+| `genres/` | | `genres()` (list) | ✓ |
+| `single/id/{id}` (`/page/{p}`) | | `single(id, page=None)`: titles, **people** and articles share one id space (a person's `imdb` is a full URL, `https://www.imdb.com/name/nm…`). A title adds collections, soundtracks, reviews, news, quotes, quotes_cs, related_posts, metacritic/rottentomatoes scores, 30nama_userrate, seo.canonical. `person = single` | ✓ |
+| `search/page/{p}/order/{d}/orderby/{o}/` | `query` | `search(query, page, orderby, order)`, `autocomplete(query)` (orderby imdb) | ✓ |
+| `full_search/type/{all\|title\|person\|news}/orderby/{o}/order/{d}/page/{p}` | `query` | `full_search(query, type)` → `{title, person, news}` | ✓ |
+| `pagination/type/{category}/page/{p}/order/{d}/orderby/{o}/streamonly/{yes\|no}` | | `archive(type, page, orderby, order, stream_only)` | ✓ |
+| `list/type/{type}/value/{value}/page/{p}/orderby/{o}/order/desc/streamonly/{yes\|no}/{extra}` | | `list(type, value, ...)` | ✓ |
+| `advanced_search_parametres` (sic) | | `advanced_search_parameters()` | ✓ |
+| `advanced_search/page/{p}/orderby/{o}/order/{d}` | `parameters` (JSON) | `advanced_search(...)`. Unlike v2, `genre`/`type` take the **numeric ids** from `advanced_search_parametres` (drama = `3362`, movie = `15`; list or scalar both work), and `keyword` filters by title (the site's watch-together search sends `{keyword, stream: true}`) | ✓ |
+| `comment/id/{post}/page/{p}/type/{comment\|review}/orderby/{date\|like}` | | `comments(post_id, page, type, orderby)` → `{page, pages, total_comments, type, comments}` | ✓ |
+| `article/type/{news\|announcement\|…}/page/{p}` | | `articles(type, page)`; full article via `single` | ✓ |
+| `collection/page/{p}` | `query` (optional) | `collections(page, query)` → `{collections, page, pages}` | ✓ |
+| `collection/id/{id}` | | `collection(id)` | ✓ |
+| `toplist/list/{slug}` | | `toplist(slug)`: `top-movie-imdb`, `top-series-imdb`, `top-movie-30nama`, `top-series-30nama` (an unknown slug silently returns the default list) | ✓ |
+| `boxoffice/iran/{yes\|no}` | | `boxoffice(iran=False)` → `{posts, seo}`; `posts` was empty for both markets on 2026-10-24 | ✓ |
+| `schedule/type/{series\|anime}` | | `schedule(type)` | ✓ |
+| `person/gender/{g}/profession/{p}/page/{n}` | | `people(gender, profession, page)` | ✓ |
+| `url` | `url` | `url_to_post(url)`: unused by the site; no URL form tried was accepted (all NotFound) | err |
+| `tos`, `dmca` | | `{content, seo}` | ✓ |
+| `event` | | `event()`: live "30nama Party" event: status, title, cover, discount, hls, date, chatServer, isChatEnabled, profiles | ✓ |
+
+**Playback and library** (need a session)
+
+| Path | Form | Method | Live |
+|---|---|---|---|
+| `stream/id/{id}` | `freeStream` (0/1) | `stream(id)` → `{data, file: {url, ip, source: [{label, auto, 2ch, 6ch}]}, subtitle: {fa, en}, options: {intro_start, intro_end, key}, watched, image, vast2}` | ✓ (HLS plays) |
+| `download/id/{id}` | `freeDownload` (0/1) | `download(id)` → `{download}` | ✓ |
+| `{host}/observer/observer` (outside `/api/v1`) | `fid, pid, t, d, k, uid` (`k` = stream `options.key`) | `observer(post_id, file_id, time, duration, key)` | offline |
+| `stream_watched/sortBy/{n}/sortBy/` | | `watched()`: watch history, a list of posts | ✓ |
+| `stream_watched_dismiss/id/{id}` | | `dismiss_watched(id)` | offline |
+| `user_mylist` | | `my_lists()` → ids per group | ✓ |
+| `mylist/group/{group}/page/{p}` | | `my_list(group, page)` | ✓ |
+| `add_to_mylist/id/{id}/group/{group}` | | `list_toggle(group, id)` (**toggles**) | ✓ (reverted) |
+| `notification/status/{all\|unread}/page/{p}` | | `notifications(status, page)` | ✓ |
+| `readnotification/id/{id}` | | `read_notification(id)` | offline |
+
+**Social** (public writes, offline tests only)
+
+| Path | Form | Method |
+|---|---|---|
+| `sendcomment/post_id/{post}` (`/comment_id/{reply_to}`) | `text` | `send_comment(post_id, text, reply_to=None)` |
+| `rate_comment/id/{comment}/post_id/{post}/rate/{r}` | | `rate_comment(comment_id, post_id, rate)` |
+| `rate_post/id/{post}/rate/{r}` | | `rate_post(post_id, rate)` |
+| `request_parameters` / `requests/page/{p}` | | `request_parameters()`, `requests(page)` (✓ live, read-only) |
+| `request` | `type, subtype, title, note, g-recaptcha-response` | `submit_request(...)` |
+
+**Plans and payments** (payments are offline-tested only)
+
+| Path | Method | Live |
+|---|---|---|
+| `plans` (`/discountcode/{c}`) | `plans(discount_code=None)` → `{golden, blue, red}` | ✓ |
+| `plans_features` (`/discountcode/{c}`) | `plans_features()` → `{free, red, golden, is_abroad}` | ✓ |
+| `discount/discountcode/{c}/planid/{id}` | `check_discount(code, plan_id)` | offline |
+| `transactions`, `txn/txnid/{id}` | `transactions()` → `{list}`, `transaction_status(id)` | ✓ / offline |
+| `check_upgrade`, `upgrade_red_to_golden_check` | `check_upgrade()` → `{blue, golden, red, red_to_golden, upgrade_to_golden, cryptocurrencies}` | ✓ |
+| `voucher/vouchercode/{c}`, `upgrade_code/upgrade_code/{c}` | `use_voucher(code)`, `upgrade_code(code)` | offline |
+| `shaparak/planid/{id}/discountcode/{c}` | `create_transaction_shaparak(...)` | offline |
+| `cryptocurrency/planid/{id}/currency/{cur}/discountcode/{c}` | `create_transaction_crypto(...)` | offline |
+| `perfectmoney/planid/{id}/discountcode/{c}` | `create_transaction_perfectmoney(...)` | offline |
+
+Also in the site's client but not wrapped (niche, legacy or campaign-only): `login/`, `register/`
+(pre-V2 forms), `verify/userlogin/{u}/token/{t}`, `resetpassword/userlogin/{u}`(`/code/{c}`),
+`campaignRegister`/`campaignVerify`/`campaignResend`, `perfectvoucher/…`, `weswap_verify/…`,
+`upgrade_red_to_golden`, `get_hls` (watch-party stream), `user_party`, `cdcg`. Call any of them
+with `WebClient.call(path, **form)`.
+
+---
+
 ## Shared objects
 
 ### Post
@@ -441,7 +624,8 @@ for p in c.iter_pages(c.archive, "drama", orderby="favorite", max_pages=3):
 |---|---|---|
 | `sinama/config.py` | `js/config.js` | hosts, keys, headers, timeouts, scheduler tuning, env var names |
 | `sinama/api.py` | `js/api.js` | `Transport` (discovery, probing, HTTP, envelope), `Scheduler`, `check()` |
-| `sinama/client.py` | `js/api.js` (actions) | `Client`: one method per action, session handling |
+| `sinama/client.py` | `js/api.js` (actions) | `Client`: one method per v2 action, session handling |
+| `sinama/web.py` | (30nama.com's `30nama-api` client) | `WebClient` / `WebTransport` for the website API v1 |
 | `sinama/library.py` | `N.lib` in `js/api.js` | watchlist/favorites cache, idempotent add/remove |
 | `sinama/direct.py` | `js/direct.js` | download link extraction and file-name parsing |
 | `sinama/player.py` | `js/player.js` | items/seasons/resume, quality pick, markers, subtitles, `ProgressReporter` |
@@ -454,8 +638,21 @@ for p in c.iter_pages(c.archive, "drama", orderby="favorite", max_pages=3):
 `Client(token=None, store=None, host=None, api_key=None, language="en", version="1.0.0", timeout=20, transport=None, persist=True)`.
 `Client.call(name, **fields)` returns the raw envelope of any action and `Client.get(name, **fields)` its `result`.
 
+`WebClient(token=None, store=None, transport=None, persist=True, timeout=20)`; `WebClient.call(path, **form)` / `get(path, **form)` for any v1 path.
+
+```python
+from sinama import Client, WebClient
+
+web = WebClient()                       # ~/.sinama/web-session.json
+web.qr_login(approve_with=Client())     # once: link a website session from the v2 session
+for c in web.comments(8863, type="review", orderby="like")["comments"]:
+    print(c)
+print([p["title"] for p in web.toplist("top-movie-imdb")["posts"][:10]])
+```
+
 Environment: `SINAMA_TOKEN` (session token), `SINAMA_SESSION_FILE` (default `~/.sinama/session.json`),
-`SINAMA_HOST` (skip discovery), `site_30NAMA_email` / `site_30NAMA_password` (defaults for `login()`).
+`SINAMA_HOST` (skip discovery), `site_30NAMA_email` / `site_30NAMA_password` (defaults for `login()`),
+`SINAMA_WEB_TOKEN` / `SINAMA_WEB_SESSION_FILE` (website session, default `~/.sinama/web-session.json`).
 
 ## CLI
 
@@ -469,4 +666,7 @@ python -m sinama archive drama --sort favorite
 python -m sinama single 8863 | stream 8863 | downloads 8863
 python -m sinama mylist favorite | continue
 python -m sinama --json call archive slugs=anime page=2 streamonly=true
+python -m sinama web-login                   # link a website (v1) session from the v2 session
+python -m sinama web comment/id/8863/page/1/type/review/orderby/like
+python -m sinama web toplist/list/top-movie-imdb
 ```
