@@ -1,7 +1,7 @@
 """Command line: `python -m sinama <command>` (or the `sinama` script).
 
     sinama qr-login               approve the printed URL on a logged-in device
-    sinama login [--captcha TOK]  password login from $site_30NAMA_email / $site_30NAMA_password
+    sinama login [--captcha TOK]  password login from $SITE_30NAMA_EMAIL / $SITE_30NAMA_PASSWORD
     sinama whoami | logout | test
     sinama home | menu | plans
     sinama search QUERY [--page N] [--stream-only]

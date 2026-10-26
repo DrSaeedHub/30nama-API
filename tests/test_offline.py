@@ -121,8 +121,8 @@ def test_login_sends_fields_and_saves_session(offline, fake, monkeypatch):
 
 
 def test_login_defaults_to_env(offline, fake, monkeypatch):
-    monkeypatch.setenv("site_30NAMA_email", "env@x.y")
-    monkeypatch.setenv("site_30NAMA_password", "envpw")
+    monkeypatch.setenv("SITE_30NAMA_EMAIL", "env@x.y")
+    monkeypatch.setenv("SITE_30NAMA_PASSWORD", "envpw")
     fake.handler = lambda a, d, h: FakeResponse(200, fail("invalid-input-response", 403, ["retry"]))
     with pytest.raises(CaptchaRequired) as ei:
         offline.login()

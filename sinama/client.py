@@ -111,7 +111,7 @@ class Client:
         return bool((r or {}).get("captcha"))
 
     def login(self, username=None, password=None, recaptcha_response=None):
-        """Password login. Defaults to $site_30NAMA_email / $site_30NAMA_password.
+        """Password login. Defaults to $SITE_30NAMA_EMAIL / $SITE_30NAMA_PASSWORD.
 
         The server requires a Google reCAPTCHA token (`recaptcha_response`) whenever
         captcha_required() is True, which it is for the TV client keys. Without one this

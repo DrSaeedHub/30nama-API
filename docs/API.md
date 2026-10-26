@@ -133,7 +133,7 @@ solving it on 30nama.com; for unattended use, log in with QR instead.
 | `recaptcha_response` | string | reCAPTCHA token (required while `captcha` is true) |
 
 **Result** contains the session token (`token`; some versions use `user_session`/`usertoken`).
-→ `Client.login(username=None, password=None, recaptcha_response=None)`; username/password default to `$site_30NAMA_email` / `$site_30NAMA_password`.
+→ `Client.login(username=None, password=None, recaptcha_response=None)`; username/password default to `$SITE_30NAMA_EMAIL` / `$SITE_30NAMA_PASSWORD`.
 
 ### `otp`
 Send a one-time code to an email or mobile number. Captcha-gated like `login`.
@@ -651,7 +651,7 @@ print([p["title"] for p in web.toplist("top-movie-imdb")["posts"][:10]])
 ```
 
 Environment: `SINAMA_TOKEN` (session token), `SINAMA_SESSION_FILE` (default `~/.sinama/session.json`),
-`SINAMA_HOST` (skip discovery), `site_30NAMA_email` / `site_30NAMA_password` (defaults for `login()`),
+`SINAMA_HOST` (skip discovery), `SITE_30NAMA_EMAIL` / `SITE_30NAMA_PASSWORD` (defaults for `login()`),
 `SINAMA_WEB_TOKEN` / `SINAMA_WEB_SESSION_FILE` (website session, default `~/.sinama/web-session.json`).
 
 ## CLI

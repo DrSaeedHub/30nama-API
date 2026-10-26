@@ -54,8 +54,8 @@ NO_RETRY = {"observer", "logout", "qrlogin_login", "qrlogin_auth", "login", "otp
 ENV_TOKEN = "SINAMA_TOKEN"
 ENV_SESSION_FILE = "SINAMA_SESSION_FILE"
 ENV_HOST = "SINAMA_HOST"
-ENV_EMAIL = "site_30NAMA_email"
-ENV_PASSWORD = "site_30NAMA_password"
+ENV_EMAIL = "SITE_30NAMA_EMAIL"
+ENV_PASSWORD = "SITE_30NAMA_PASSWORD"
 
 DEFAULT_SESSION_FILE = os.path.join(os.path.expanduser("~"), ".sinama", "session.json")
 

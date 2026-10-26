@@ -32,7 +32,7 @@ python -m sinama qr-login
 Open the printed `https://30nama.com/auth/<code>` link on any device where you are signed in
 to 30nama.com and approve it (codes last about 10 minutes). Alternatives: `SINAMA_TOKEN=<token>`,
 or `Client().login(recaptcha_response=<token solved in a browser>)`, which reads
-`site_30NAMA_email` / `site_30NAMA_password` from the environment.
+`SITE_30NAMA_EMAIL` / `SITE_30NAMA_PASSWORD` from the environment.
 
 A website (v1) session is separate; link one from the v2 session without another approval:
 
