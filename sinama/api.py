@@ -9,6 +9,7 @@ form-urlencoded body and `c-*` headers. The JSON answer is an envelope:
 `call()` returns that envelope; `get()` returns `result` or raises an ApiError.
 """
 import json
+import os
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -71,8 +72,24 @@ class Scheduler:
             return fn()
 
 
+def default_session():
+    """A requests.Session; through $SINAMA_PROXY when it is set (and then never through the environment's own proxy
+    settings, so a request cannot leave another way)."""
+    s = requests.Session()
+    proxy = os.environ.get(C.ENV_PROXY)
+    if proxy:
+        s.trust_env = False
+        s.proxies = {"http": proxy, "https": proxy}
+    return s
+
+
 class Transport:
-    """Low-level HTTP access to the hana-api v2 RPC endpoint."""
+    """Low-level HTTP access to the hana-api v2 RPC endpoint.
+
+    `session` sends the HTTP: requests.Session by default, or anything shaped like it (sinama.HttpxSession over
+    an app's own client). A network error it raises as a requests exception is retried; any other error it
+    raises (the app refusing to send, say) passes through untouched.
+    """
 
     def __init__(self, host=None, api_key=None, token=None, language=C.LANGUAGE,
                  version=C.VERSION_NUMBER, user_agent=C.USER_AGENT, timeout=C.TIMEOUT,
@@ -84,7 +101,7 @@ class Transport:
         self.version = version
         self.user_agent = user_agent
         self.timeout = timeout
-        self.http = session or requests.Session()
+        self.http = session or default_session()
         self.scheduler = scheduler or Scheduler()
         self.backoff = list(C.BACKOFF_SECONDS if backoff is None else backoff)
         self.on_login_required = None  # callback(ApiError) when a token is rejected
@@ -109,8 +126,28 @@ class Transport:
                     continue
         return list(C.FALLBACK_HOSTS)
 
+    def probe(self, host, key):
+        """The action a host answered with success (PROBE_ACTIONS in turn); raises when it answered none.
+
+        `test` comes first; a host that refuses it (a 403 page, "Access Denied") is asked once more with the next
+        action, because some networks get `test` alone refused while the API itself answers."""
+        reasons = []
+        for action in C.PROBE_ACTIONS:
+            try:
+                env = self._send(host, key, action, {}, timeout=C.PROBE_TIMEOUT)
+            except (TransportError, ValueError) as e:
+                reasons.append("%s: %s" % (action, e))
+                continue
+            if env.get("success"):
+                return action
+            reasons.append("%s: %s" % (action, env.get("msg") or "HTTP %s" % env.get("http_status")))
+        raise ValueError("; ".join(reasons))
+
     def init(self):
-        """Pick the first host that answers `test` successfully, trying each key in turn."""
+        """Pick the first host that answers a probe (`test`, then `menu`), trying each key in turn.
+
+        When every host fails with an error of the session itself (not a network or API error: an app's own
+        refusal to send), that error is raised as it is, instead of NoEndpoint."""
         seen, hosts = set(), []
         for h in self.discover() + C.FALLBACK_HOSTS:
             if h.get("host") and h["host"] not in seen:
@@ -118,22 +155,25 @@ class Transport:
                 hosts.append(h["host"])
         if self.host and self.host not in seen:
             hosts.insert(0, self.host)
+        reasons, foreign = [], None
         for key in C.API_KEYS:
-            def probe(h, key=key):
-                env = self._send(h, key, "test", {}, timeout=C.PROBE_TIMEOUT)
-                if not env.get("success"):
-                    raise ValueError("rejected")
-                return h
             with ThreadPoolExecutor(len(hosts)) as ex:
-                futures = [ex.submit(probe, h) for h in hosts]
+                futures = {ex.submit(self.probe, h, key): h for h in hosts}
                 for f in as_completed(futures):
                     try:
-                        self.host = f.result()
-                        self.api_key = key
-                        return {"host": self.host, "key": key}
-                    except Exception:
+                        f.result()
+                    except ValueError as e:
+                        reasons.append("%s (%s)" % (futures[f], e))
                         continue
-        raise NoEndpoint("no endpoint reachable: " + ", ".join(hosts))
+                    except Exception as e:  # the session's own error: kept to be raised as it is
+                        foreign = foreign or e
+                        continue
+                    self.host = futures[f]
+                    self.api_key = key
+                    return {"host": self.host, "key": key}
+        if foreign is not None and not reasons:
+            raise foreign
+        raise NoEndpoint("no endpoint reachable: " + ("; ".join(reasons[:4]) or ", ".join(hosts)))
 
     def ensure_host(self):
         if not self.host:

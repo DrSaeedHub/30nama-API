@@ -134,3 +134,16 @@ def sample(live):
     series = [p["id"] for p in h["series"]["posts"] if p["options"]["stream"]]
     # `candidates`: a title flagged stream:true can still answer "M3U8 file not found" (seen live).
     return {"movie": movies[0], "series": series[0], "candidates": {"movie": movies[:8], "series": series[:8]}}
+
+
+# ---------------------------------------------------------------- live tests only through a proxy
+def pytest_collection_modifyitems(config, items):
+    """Live tests reach 30nama from this machine. They run only through $SINAMA_PROXY (every request of the
+    default session goes through it, names resolved on the proxy), unless SINAMA_LIVE_DIRECT=1 allows the
+    machine's own connection."""
+    if os.environ.get(C.ENV_PROXY) or os.environ.get("SINAMA_LIVE_DIRECT") == "1":
+        return
+    skip = pytest.mark.skip(reason="live test: set SINAMA_PROXY (or SINAMA_LIVE_DIRECT=1)")
+    for item in items:
+        if "live" in item.keywords:
+            item.add_marker(skip)

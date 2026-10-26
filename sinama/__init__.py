@@ -1,6 +1,6 @@
 """sinama: unofficial Python client for the 30nama hana-api v2 RPC API."""
 from . import config, direct, helpers, player, screens
-from .api import Scheduler, Transport
+from .api import Scheduler, Transport, default_session
 from .client import Client
 from .errors import (
     ApiError,
@@ -15,12 +15,14 @@ from .errors import (
     TransportError,
 )
 from .library import Library
-from .store import MemoryStore, SessionStore
+from .session import HttpxSession, tls_context
+from .store import CallbackStore, MemoryStore, SessionStore, Store
 from .web import WebClient, WebTransport
 
-__version__ = "1.0.0"
+__version__ = "1.1.0"
 __all__ = [
-    "Client", "WebClient", "Transport", "WebTransport", "Scheduler", "Library", "SessionStore", "MemoryStore",
+    "Client", "WebClient", "Transport", "WebTransport", "Scheduler", "Library", "Store", "SessionStore", "MemoryStore",
+    "CallbackStore", "HttpxSession", "tls_context", "default_session",
     "SinamaError", "TransportError", "RateLimited", "Blocked", "NoEndpoint", "ApiError",
     "LoginRequired", "NotFound", "CaptchaRequired", "QRCodeExpired",
     "config", "direct", "helpers", "player", "screens",

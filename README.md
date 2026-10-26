@@ -17,7 +17,7 @@ Unofficial, single-package (monolithic) Python library for both 30nama APIs:
 pip install -e .[test]
 ```
 
-Python 3.9+, one dependency (`requests`).
+Python 3.9+, one dependency (`requests`); `httpx` only for `HttpxSession` (`pip install -e .[httpx]`).
 
 ## Log in
 
@@ -63,10 +63,23 @@ print([p["title"] for p in web.toplist("top-movie-imdb")["posts"][:5]])
 
 Every action and path, with fields, responses and errors: [docs/API.md](docs/API.md).
 
+### Your own network and session storage
+
+```python
+from sinama import CallbackStore, Client, HttpxSession, Transport
+
+c = Client(transport=Transport(session=HttpxSession(my_send)),        # my_send(method, url, **httpx_kwargs)
+           store=CallbackStore(load=my_load, save=my_save))           # the session kept where you keep secrets
+```
+
+`HttpxSession` turns httpx's network errors into requests' (so retries work as usual) and lets any other error
+of yours pass through untouched. Build your own httpx clients with `sinama.tls_context()`: Cloudflare in front
+of the API challenges Python's default TLS greeting. See [docs/API.md](docs/API.md#python-library).
+
 ## Layout
 
 ```
-sinama/       the library (config, api, client, web, library, direct, player, screens, helpers, store, errors, app)
+sinama/       the library (config, api, session, client, web, library, direct, player, screens, helpers, store, errors, app)
 tests/        offline tests (fake HTTP) + live tests for every endpoint
 docs/         API reference
 tools/        probe.py: call any action and dump the raw JSON
@@ -74,8 +87,12 @@ tools/        probe.py: call any action and dump the raw JSON
 
 ## Tests
 
+Live tests reach 30nama from your machine, so they run only through a proxy you name
+(`SINAMA_PROXY=socks5h://user:pass@host:1080`, names resolved on the proxy) or when you allow your own
+connection with `SINAMA_LIVE_DIRECT=1`.
+
 ```bash
-python -m pytest                  # offline + live public; logged-in tests run when a session exists
+python -m pytest                  # offline; + live public and logged-in tests with SINAMA_PROXY set
 python -m pytest tests/test_offline.py   # no network
 python -m pytest -m "live and not auth"  # live, anonymous only
 ```

@@ -32,6 +32,10 @@ USER_AGENT = (
     "(KHTML, like Gecko) 85.0.4183.93/6.5 TV Safari/537.36"
 )
 
+# A host is chosen when it answers `test`. Some networks get `test` refused (a 403 page) while the rest of the
+# API answers, so a host that refuses it is tried once more with another public action before it is given up.
+PROBE_ACTIONS = ("test", "menu")
+
 QR_BASE = "https://30nama.com/auth/"
 QR_POLL_SECONDS = 5
 QR_TTL_SECONDS = 600  # measured live: a code answers "Code Expired" after ~10 minutes
@@ -54,6 +58,8 @@ NO_RETRY = {"observer", "logout", "qrlogin_login", "qrlogin_auth", "login", "otp
 ENV_TOKEN = "SINAMA_TOKEN"
 ENV_SESSION_FILE = "SINAMA_SESSION_FILE"
 ENV_HOST = "SINAMA_HOST"
+# A proxy for every request of the default session, e.g. socks5h://user:pass@host:1080 (names resolved on the proxy).
+ENV_PROXY = "SINAMA_PROXY"
 ENV_EMAIL = "SITE_30NAMA_EMAIL"
 ENV_PASSWORD = "SITE_30NAMA_PASSWORD"
 

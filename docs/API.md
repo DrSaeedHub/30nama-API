@@ -38,7 +38,14 @@ client (1.3.198, 93 methods). Each entry lists the `sinama` method that wraps it
 | Response | JSON [envelope](#envelope-and-errors); a few exceptions are noted per action |
 
 Choose a host by calling [`test`](#test) on every discovered host and keeping the first that
-answers `success: true` (the library races them in parallel; `Transport.init()`).
+answers `success: true` (the library races them in parallel; `Transport.init()`). Some networks get `test`
+alone refused (a 403 page: a Cloudflare challenge, or an `Access Denied` envelope) while every other action
+answers, so a host that refuses `test` is asked once more with [`menu`](#menu) (`config.PROBE_ACTIONS`).
+
+Cloudflare's bot screen in front of the hosts also challenges clients by their TLS greeting: Python's default
+`ssl` context (what a plain httpx client sends) gets a "Just a moment" page (HTTP 403) on every action, while
+the context requests uses (no session tickets, post-handshake auth) is answered. `sinama.tls_context()` is
+that context; use it for any client of your own.
 
 ### Headers
 
@@ -277,8 +284,8 @@ Needs a streaming plan. Fields: `post_id`, `free_stream` (optional).
 {"vast2": "https://servedby.…/fc.php?script=apVideo:vast2&zoneid=1",
  "info": {"post_id": 12382, "title": {"english": "…", "local": null}},
  "image": { … },
- "continue_watching": {"post_id": 140140, "file_id": 27272, "time": 450, "display_time": "00:07:30",
-                       "progress": 6},
+ "continue_watching": {"post_id": 140140, "file_id": 27272, "time": 450, "progress": 6,
+                       "season": 2, "episode": 2, "episode_number": 2, "episode_name": "Season 2 - Episode 2"},
  "hls": [{
    "info": {"file_id": 39301, "season": 1, "episode": "1", "episode_number": 1,
             "episode_name": "Season 1 - Episode 1"},
@@ -298,7 +305,8 @@ A title can be flagged `options.stream: true` and still answer `success: false`,
 A movie has one `hls` item whose `info` is just `{file_id}` and whose `options` has only
 `intro_start`, `intro_end`, `token`; a series has one item per episode (62 for a 5-season
 show). `continue_watching` is `null` for a title never played; `progress` is an integer
-percent here. `vast2` is an ad (VAST) tag. HLS URLs are signed with the
+percent here; a series adds `season`, `episode`, `episode_number`, `episode_name` (the `display_time` field
+seen until late October 2026 is gone). `vast2` is an ad (VAST) tag. HLS URLs are signed with the
 requesting IP and expire; fetch them from the machine that plays them. Keep `options.token`
 for `observer`. → `Client.stream(post_id, free=False)`; helpers in `sinama.player`.
 
@@ -350,8 +358,8 @@ Report playback progress (the TV app sends it every 10 s and on close).
 | `duration` | int | seconds |
 | `token` | string | `hls[i].options.token` |
 
-Answers with an **empty body**: HTTP 200 with a token, HTTP 204 without one (anonymous reports
-are ignored). Never retried. Behaviour measured live:
+Answers with an **empty body**: HTTP 204 (with a token it was HTTP 200 until late October 2026;
+anonymous reports are ignored). Never retried. Behaviour measured live:
 
 - Reports are applied **asynchronously**: the new position shows up in `stream.continue_watching`
   and in the `continue_watching` list after **80–120 s**.
@@ -623,7 +631,7 @@ for p in c.iter_pages(c.archive, "drama", orderby="favorite", max_pages=3):
 | Module | Mirrors (reference app) | Contents |
 |---|---|---|
 | `sinama/config.py` | `js/config.js` | hosts, keys, headers, timeouts, scheduler tuning, env var names |
-| `sinama/api.py` | `js/api.js` | `Transport` (discovery, probing, HTTP, envelope), `Scheduler`, `check()` |
+| `sinama/api.py` | `js/api.js` | `Transport` (discovery, probing with a second action, HTTP, envelope), `Scheduler`, `check()`, `default_session()` |
 | `sinama/client.py` | `js/api.js` (actions) | `Client`: one method per v2 action, session handling |
 | `sinama/web.py` | (30nama.com's `30nama-api` client) | `WebClient` / `WebTransport` for the website API v1 |
 | `sinama/library.py` | `N.lib` in `js/api.js` | watchlist/favorites cache, idempotent add/remove |
@@ -631,11 +639,38 @@ for p in c.iter_pages(c.archive, "drama", orderby="favorite", max_pages=3):
 | `sinama/player.py` | `js/player.js` | items/seasons/resume, quality pick, markers, subtitles, `ProgressReporter` |
 | `sinama/screens.py` | `js/screens.js` | composed Home / Details / Search / Browse / My list |
 | `sinama/helpers.py` | `N.img/N.title/…` | post field helpers |
-| `sinama/store.py` | `N.store` | JSON session file (`SessionStore`), `MemoryStore` |
+| `sinama/store.py` | `N.store` | the `Store` interface: JSON file (`SessionStore`), `MemoryStore`, `CallbackStore` |
+| `sinama/session.py` | | `HttpxSession` (requests-shaped over httpx or an app's own sender), `tls_context()` |
 | `sinama/errors.py` | | exception hierarchy |
 | `sinama/app.py` | `js/app.js` | CLI entry point |
 
 `Client(token=None, store=None, host=None, api_key=None, language="en", version="1.0.0", timeout=20, transport=None, persist=True)`.
+
+**From outside: the network and the session.** An app with its own way out (proxies, a router with rules)
+and its own secret storage plugs both in:
+
+```python
+from sinama import CallbackStore, Client, HttpxSession, Transport
+
+session = HttpxSession(router_send)            # router_send(method, url, **httpx_kwargs) -> httpx.Response
+store = CallbackStore(load=vault_load, save=vault_save)   # load() -> dict, save(dict)
+c = Client(transport=Transport(session=session), store=store)
+```
+
+- `Transport(session=...)` takes anything shaped like `requests.Session` (`get`/`post` with `params`, `data`,
+  `headers`, `timeout`; responses with `status_code`, `text`, `content`, `headers`, `ok`, `json()`,
+  `raise_for_status()`). Discovery, every action and `subtitle()` go through it.
+- `HttpxSession(send)` is that shape over an `httpx.Client` or a callable. httpx network errors become the
+  matching requests errors, so retries and messages stay the same; **any other error the callable raises passes
+  through untouched and is never retried** (an app refusing to send because its proxy is down). `Transport.init()`
+  raises such an error as it is when every host failed with it, instead of `NoEndpoint`. `HttpxSession()` with no
+  argument builds its own client with `tls_context()`.
+- `Store` is the session store interface (`load`, `save`, `update`, `clear`); `SessionStore` (JSON file, the
+  default), `MemoryStore` and `CallbackStore(load, save, clear=None)` implement it. The session includes the
+  token twice (`token`, and `user.user_session`): keep it secret.
+- `SINAMA_PROXY` (e.g. `socks5h://user:pass@host:1080`) sends every request of the default requests session
+  through that proxy, never through the environment's own proxy settings. The live tests run only when it is set
+  (or `SINAMA_LIVE_DIRECT=1`).
 `Client.call(name, **fields)` returns the raw envelope of any action and `Client.get(name, **fields)` its `result`.
 
 `WebClient(token=None, store=None, transport=None, persist=True, timeout=20)`; `WebClient.call(path, **form)` / `get(path, **form)` for any v1 path.
@@ -650,7 +685,7 @@ for c in web.comments(8863, type="review", orderby="like")["comments"]:
 print([p["title"] for p in web.toplist("top-movie-imdb")["posts"][:10]])
 ```
 
-Environment: `SINAMA_TOKEN` (session token), `SINAMA_SESSION_FILE` (default `~/.sinama/session.json`),
+Environment: `SINAMA_PROXY` (a proxy for the default session), `SINAMA_TOKEN` (session token), `SINAMA_SESSION_FILE` (default `~/.sinama/session.json`),
 `SINAMA_HOST` (skip discovery), `SITE_30NAMA_EMAIL` / `SITE_30NAMA_PASSWORD` (defaults for `login()`),
 `SINAMA_WEB_TOKEN` / `SINAMA_WEB_SESSION_FILE` (website session, default `~/.sinama/web-session.json`).
 

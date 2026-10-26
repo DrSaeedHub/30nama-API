@@ -1,6 +1,11 @@
-"""Session persistence (the TV app's `N.store` / `n30.session`), as a JSON file.
+"""Where a client keeps its session (the TV app's `N.store` / `n30.session`): {"token", "user", "host"}.
 
-Shape on disk: {"token": "...", "user": {...}, "host": "https://..."}.
+`Store` is the interface: load, save, update, clear. `SessionStore` keeps it in a JSON file (the default),
+`MemoryStore` nowhere, and `CallbackStore` wherever an app keeps its secrets (an encrypted settings table):
+
+    Client(store=CallbackStore(load=lambda: vault.get("30nama") or {}, save=lambda d: vault.put("30nama", d)))
+
+The session holds the token (and `user` repeats it as user_session): treat everything saved as a secret.
 """
 import json
 import os
@@ -8,7 +13,29 @@ import os
 from . import config as C
 
 
-class SessionStore:
+class Store:
+    """The session store interface. Subclasses implement load() and save(); update() and clear() follow."""
+
+    def load(self):
+        """The saved session, {} when there is none."""
+        return {}
+
+    def save(self, data):
+        raise NotImplementedError
+
+    def update(self, **fields):
+        data = self.load()
+        data.update({k: v for k, v in fields.items() if v is not None})
+        self.save(data)
+        return data
+
+    def clear(self):
+        self.save({})
+
+
+class SessionStore(Store):
+    """A JSON file: ~/.sinama/session.json, or $SINAMA_SESSION_FILE, or the path given."""
+
     def __init__(self, path=None):
         self.path = path or os.environ.get(C.ENV_SESSION_FILE) or C.DEFAULT_SESSION_FILE
 
@@ -33,12 +60,6 @@ class SessionStore:
         except OSError:
             pass
 
-    def update(self, **fields):
-        data = self.load()
-        data.update({k: v for k, v in fields.items() if v is not None})
-        self.save(data)
-        return data
-
     def clear(self):
         try:
             os.remove(self.path)
@@ -46,7 +67,7 @@ class SessionStore:
             pass
 
 
-class MemoryStore(SessionStore):
+class MemoryStore(Store):
     """Non-persistent store (tests, one-off scripts)."""
 
     def __init__(self, data=None):
@@ -61,3 +82,24 @@ class MemoryStore(SessionStore):
 
     def clear(self):
         self._data = {}
+
+
+class CallbackStore(Store):
+    """The session kept by the app: load() -> dict, save(dict), and optionally clear() (default: save({}))."""
+
+    def __init__(self, load, save, clear=None):
+        self.path = None
+        self._load, self._save, self._clear = load, save, clear
+
+    def load(self):
+        data = self._load()
+        return dict(data) if isinstance(data, dict) else {}
+
+    def save(self, data):
+        self._save(dict(data))
+
+    def clear(self):
+        if self._clear is not None:
+            self._clear()
+        else:
+            self._save({})

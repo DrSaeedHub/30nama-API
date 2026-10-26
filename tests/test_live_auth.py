@@ -120,7 +120,7 @@ def test_continue_watching_shape(auth):
     r = auth.continue_watching()
     assert {"posts", "total"} <= set(r)
     for p in r["posts"]:
-        assert {"id", "time", "display_time", "progress"} <= set(p["data"]) and p["data"]["id"] == p["id"]
+        assert {"id", "time", "progress"} <= set(p["data"]) and p["data"]["id"] == p["id"]
 
 
 def test_resume_point_from_stream(auth):
@@ -130,7 +130,7 @@ def test_resume_point_from_stream(auth):
     pid = rows[0]["id"]
     st = auth.stream(pid)
     cw = st["continue_watching"]
-    assert {"post_id", "file_id", "time", "display_time", "progress"} <= set(cw)
+    assert {"post_id", "file_id", "time", "progress"} <= set(cw)   # display_time was dropped in late October 2026
     idx, at = player.resume_point(st)
     assert str(player.items(st)[idx]["info"]["file_id"]) == str(cw["file_id"]) and at == float(cw["time"])
 
@@ -142,15 +142,18 @@ def test_observer_accepted(auth):
     server-side: live, identical requests were sometimes applied (after 80-120 s) and
     sometimes dropped, so a "position moved" assertion would be flaky (see docs/API.md).
     """
-    rows = _continue_rows(auth)
-    if not rows:
+    for row in _continue_rows(auth)[:4]:
+        st = auth.stream(row["id"])
+        cw = st.get("continue_watching") or {}
+        if float(cw.get("time") or 0) >= 1:
+            pid = row["id"]
+            break
+    else:
         pytest.skip("no existing resume point to re-report without changing your watch state")
-    pid = rows[0]["id"]
-    st = auth.stream(pid)
-    cw = st["continue_watching"]
     item = next(i for i in player.items(st) if str(i["info"]["file_id"]) == str(cw["file_id"]))
     env = auth.observer(pid, cw["file_id"], cw["time"], 7200, token=item["options"].get("token", ""))
-    assert env["success"] and env["http_status"] == 200 and env["result"] is None  # empty body when logged in
+    # An empty body: HTTP 200 with a token until late October 2026, 204 since.
+    assert env["success"] and env["http_status"] in (200, 204) and env["result"] is None
     rep = player.ProgressReporter(auth, pid, item, lambda: (cw["time"], 7200))
     assert rep.report(final=True) and rep.reports == 1, rep.last_error
 

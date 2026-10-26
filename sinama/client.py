@@ -28,7 +28,8 @@ class Client:
                  version=C.VERSION_NUMBER, timeout=C.TIMEOUT, transport=None, persist=True):
         """
         token:   session token (c-token). Default: $SINAMA_TOKEN, else the saved session.
-        store:   SessionStore (default ~/.sinama/session.json, or $SINAMA_SESSION_FILE).
+        store:   where the session is kept: any sinama.Store (default SessionStore: ~/.sinama/session.json, or
+                 $SINAMA_SESSION_FILE; CallbackStore for an app's own secret storage).
         host:    API base like https://world.hana-api.com/api/v2. Default: $SINAMA_HOST or discovery.
         persist: save token/user/host to the store after login.
         """
