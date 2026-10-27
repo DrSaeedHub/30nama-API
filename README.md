@@ -76,6 +76,11 @@ c = Client(transport=Transport(session=HttpxSession(my_send)),        # my_send(
 of yours pass through untouched. Build your own httpx clients with `sinama.tls_context()`: Cloudflare in front
 of the API challenges Python's default TLS greeting. See [docs/API.md](docs/API.md#python-library).
 
+When Cloudflare puts its bot challenge in front of the API on your network, calls and host discovery raise
+`ChallengeRequired` (a `Blocked`, so `except Blocked` still catches it; `.host` names the host): a person has to
+confirm the challenge on that network. `sinama.is_challenge(status, headers, body)` classifies your own responses
+the same way.
+
 ## Layout
 
 ```

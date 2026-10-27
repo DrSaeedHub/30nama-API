@@ -41,6 +41,9 @@ Choose a host by calling [`test`](#test) on every discovered host and keeping th
 answers `success: true` (the library races them in parallel; `Transport.init()`). Some networks get `test`
 alone refused (a 403 page: a Cloudflare challenge, or an `Access Denied` envelope) while every other action
 answers, so a host that refuses `test` is asked once more with [`menu`](#menu) (`config.PROBE_ACTIONS`).
+A host that answers with Cloudflare's challenge (below) is not a dead host: discovery still takes another host that
+answers, but when none can be used and one answered with the challenge, `init()` raises `ChallengeRequired` (its
+`.host` the first such host) instead of `NoEndpoint`, since passing the challenge is what makes the host usable.
 
 Cloudflare's bot screen in front of the hosts also challenges clients by their TLS greeting: Python's default
 `ssl` context (what a plain httpx client sends) gets a "Just a moment" page (HTTP 403) on every action, while
@@ -85,8 +88,9 @@ key is spelled `results`.
 | Unknown archive slug | `NO_SLUG_FOUND` | `NotFound` |
 | QR code | `Code Expired`, `Wrong Code` | `QRCodeExpired` |
 | Anything else with `success: false` | | `ApiError` |
+| Cloudflare's bot challenge: header `cf-mitigated: challenge`, or a 403/429/503 from `Server: cloudflare` whose first 8 KB contain `Just a moment`, `challenge-platform`, `cf_chl_opt` or `cf-challenge` (any case) | (HTML) | `ChallengeRequired`, a `Blocked` with `.host` (not retried): a person has to confirm the challenge on this network |
 | Cloudflare 429 / `error code: 1015` | (HTML/text) | `RateLimited` (retried) |
-| Cloudflare challenge page, `REQUESTBLOCK`, `REQUESTCAPTCHA`, `APIMAINTENANCE` | (HTML/text) | `Blocked` (not retried) |
+| Other challenge-like 403/503 HTML page, `REQUESTBLOCK`, `REQUESTCAPTCHA`, `APIMAINTENANCE` | (HTML/text) | `Blocked` (not retried) |
 | Network error, timeout, other non-JSON (5xx) | | `TransportError` (retried) |
 
 All `ApiError`s expose `.msg`, `.status`, `.envelope`, `.action` (the action name) and `.hint` (the envelope's `action`).
@@ -665,6 +669,9 @@ c = Client(transport=Transport(session=session), store=store)
   through untouched and is never retried** (an app refusing to send because its proxy is down). `Transport.init()`
   raises such an error as it is when every host failed with it, instead of `NoEndpoint`. `HttpxSession()` with no
   argument builds its own client with `tls_context()`.
+- `sinama.is_challenge(status, headers, body_head) -> bool` is the library's own test for Cloudflare's challenge
+  (any headers mapping; the body as str or bytes, only its first 8 KB are read). Use it on responses an app fetches
+  itself, to tell "a person must confirm a challenge on this network" (`ChallengeRequired`) from a dead host.
 - `Store` is the session store interface (`load`, `save`, `update`, `clear`); `SessionStore` (JSON file, the
   default), `MemoryStore` and `CallbackStore(load, save, clear=None)` implement it. The session includes the
   token twice (`token`, and `user.user_session`): keep it secret.

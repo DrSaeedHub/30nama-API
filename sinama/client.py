@@ -11,11 +11,12 @@ Methods return the envelope's `result` and raise `ApiError` subclasses on
 """
 import os
 import time
+from urllib.parse import urlsplit
 
 from . import config as C
 from . import direct
-from .api import Transport, check
-from .errors import ApiError, CaptchaRequired, LoginRequired, NotFound, QRCodeExpired, SinamaError
+from .api import Transport, check, is_challenge
+from .errors import ApiError, CaptchaRequired, ChallengeRequired, LoginRequired, NotFound, QRCodeExpired, SinamaError
 from .library import Library
 from .store import SessionStore
 
@@ -326,6 +327,12 @@ class Client:
         s = str(url_or_file)
         if s.startswith("http"):
             r = self.transport.http.get(s, headers=self.transport.headers(), timeout=self.transport.timeout)
+            if is_challenge(r.status_code, r.headers, r.text):
+                u = urlsplit(s)
+                host = "%s://%s" % (u.scheme, u.netloc)
+                raise ChallengeRequired("subtitle: Cloudflare asks a person to confirm a challenge on this network "
+                                        "(HTTP %s from %s)" % (r.status_code, host), status=r.status_code,
+                                        body=r.text[:500], host=host)
             r.raise_for_status()
             return r.text
         return self.transport.call("subtitle/file/" + s, raw=True)

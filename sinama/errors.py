@@ -30,6 +30,23 @@ class Blocked(TransportError):
         super().__init__(message, status=status, retry=False, body=body)
 
 
+class ChallengeRequired(Blocked):
+    """Cloudflare answered with its bot challenge ("Just a moment...") instead of the API.
+
+    A person has to confirm the challenge (in a browser, on this network) before requests get through; retrying
+    from here does not help, so it is never retried. `host` is the host that answered with it, when known.
+    See `sinama.is_challenge` for what counts as a challenge.
+    """
+
+    def __init__(self, message=None, status=None, body=None, host=None):
+        if not message:
+            message = "Cloudflare asks a person to confirm a challenge on this network"
+            if host:
+                message += " (%s)" % host
+        super().__init__(message, status=status, body=body)
+        self.host = host
+
+
 class NoEndpoint(SinamaError):
     """No discovered host answered the `test` action with any client key."""
 

@@ -21,6 +21,7 @@ from .errors import (
     ApiError,
     Blocked,
     CaptchaRequired,
+    ChallengeRequired,
     LoginRequired,
     NoEndpoint,
     NotFound,
@@ -31,6 +32,41 @@ from .errors import (
 
 # Guard strings the server or Cloudflare use to say "stop, don't retry".
 _GUARDS = ("REQUESTBLOCK", "REQUESTCAPTCHA", "APIMAINTENANCE")
+
+# Cloudflare's challenge page: the statuses it comes with, the marks in its first few KB, and how far to look.
+CHALLENGE_STATUSES = (403, 429, 503)
+CHALLENGE_MARKS = ("just a moment", "challenge-platform", "cf_chl_opt", "cf-challenge")
+CHALLENGE_SCAN = 8192
+
+
+def _header(headers, name):
+    """A header's value by case-insensitive name from any mapping (requests, httpx, a plain dict); "" if absent."""
+    for k, v in (headers or {}).items():
+        if str(k).lower() == name:
+            return str(v)
+    return ""
+
+
+def is_challenge(status, headers, body_head):
+    """True when a response is Cloudflare's bot challenge rather than an answer.
+
+    Either the header `cf-mitigated: challenge`, or a 403/429/503 from a `Server: cloudflare` whose first
+    CHALLENGE_SCAN characters contain one of the challenge page's marks: "Just a moment", "challenge-platform",
+    "cf_chl_opt", "cf-challenge" (all case-insensitive). `body_head` may be the whole body, str or bytes, or None.
+    """
+    if _header(headers, "cf-mitigated").strip().lower() == "challenge":
+        return True
+    try:
+        status = int(status)
+    except (TypeError, ValueError):
+        return False
+    if status not in CHALLENGE_STATUSES or "cloudflare" not in _header(headers, "server").lower():
+        return False
+    head = (body_head or "")[:CHALLENGE_SCAN]
+    if isinstance(head, (bytes, bytearray)):
+        head = head.decode("utf-8", "replace")
+    head = head.lower()
+    return any(m in head for m in CHALLENGE_MARKS)
 
 
 def encode(params):
@@ -130,24 +166,35 @@ class Transport:
         """The action a host answered with success (PROBE_ACTIONS in turn); raises when it answered none.
 
         `test` comes first; a host that refuses it (a 403 page, "Access Denied") is asked once more with the next
-        action, because some networks get `test` alone refused while the API itself answers."""
-        reasons = []
+        action, because some networks get `test` alone refused while the API itself answers. A host that put
+        Cloudflare's challenge in front of the probes and let none of them through to the API raises
+        ChallengeRequired: it is not dead, this network has to pass the challenge first."""
+        reasons, challenge, answered = [], None, False
         for action in C.PROBE_ACTIONS:
             try:
                 env = self._send(host, key, action, {}, timeout=C.PROBE_TIMEOUT)
+            except ChallengeRequired as e:
+                challenge = challenge or e
+                reasons.append("%s: %s" % (action, e))
+                continue
             except (TransportError, ValueError) as e:
                 reasons.append("%s: %s" % (action, e))
                 continue
             if env.get("success"):
                 return action
+            answered = True
             reasons.append("%s: %s" % (action, env.get("msg") or "HTTP %s" % env.get("http_status")))
+        if challenge is not None and not answered:
+            raise challenge
         raise ValueError("; ".join(reasons))
 
     def init(self):
         """Pick the first host that answers a probe (`test`, then `menu`), trying each key in turn.
 
-        When every host fails with an error of the session itself (not a network or API error: an app's own
-        refusal to send), that error is raised as it is, instead of NoEndpoint."""
+        When no host can be used and a host answered with Cloudflare's challenge, ChallengeRequired is raised (its
+        `host` the first such host): passing the challenge is what makes a host usable again. When every host
+        fails with an error of the session itself (not a network or API error: an app's own refusal to send),
+        that error is raised as it is. Otherwise NoEndpoint, with each host's reason."""
         seen, hosts = set(), []
         for h in self.discover() + C.FALLBACK_HOSTS:
             if h.get("host") and h["host"] not in seen:
@@ -155,13 +202,16 @@ class Transport:
                 hosts.append(h["host"])
         if self.host and self.host not in seen:
             hosts.insert(0, self.host)
-        reasons, foreign = [], None
+        reasons, foreign, challenged = [], None, {}
         for key in C.API_KEYS:
             with ThreadPoolExecutor(len(hosts)) as ex:
                 futures = {ex.submit(self.probe, h, key): h for h in hosts}
                 for f in as_completed(futures):
                     try:
                         f.result()
+                    except ChallengeRequired as e:
+                        challenged.setdefault(futures[f], e)
+                        continue
                     except ValueError as e:
                         reasons.append("%s (%s)" % (futures[f], e))
                         continue
@@ -171,6 +221,12 @@ class Transport:
                     self.host = futures[f]
                     self.api_key = key
                     return {"host": self.host, "key": key}
+        if challenged:
+            names = [h for h in hosts if h in challenged]
+            first = challenged[names[0]]
+            raise ChallengeRequired("no endpoint reachable: Cloudflare asks a person to confirm a challenge on this "
+                                    "network (%s)" % ", ".join(names), status=first.status, body=first.body,
+                                    host=names[0]) from first
         if foreign is not None and not reasons:
             raise foreign
         raise NoEndpoint("no endpoint reachable: " + ("; ".join(reasons[:4]) or ", ".join(hosts)))
@@ -201,6 +257,10 @@ class Transport:
         except requests.RequestException as e:
             raise TransportError("%s: %s" % (name, e)) from e
         text = r.text
+        if is_challenge(r.status_code, r.headers, text):
+            raise ChallengeRequired("%s: Cloudflare asks a person to confirm a challenge on this network (HTTP %s from "
+                                    "%s)" % (name, r.status_code, host or self.host), status=r.status_code,
+                                    body=text[:500], host=host or self.host)
         if raw and r.status_code != 429:
             if r.status_code >= 400:
                 raise TransportError("%s: HTTP %s" % (name, r.status_code), status=r.status_code, body=text)
