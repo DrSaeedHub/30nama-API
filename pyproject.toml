@@ -8,8 +8,25 @@ version = "1.2.0"
 description = "Unofficial Python client for the 30nama (hana-api v2) API"
 readme = "README.md"
 license = { text = "MIT" }
+authors = [{ name = "DrSaeedHub" }]
 requires-python = ">=3.9"
+keywords = ["30nama", "sinama", "api", "client", "streaming", "hana-api"]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Topic :: Internet :: WWW/HTTP",
+    "Topic :: Multimedia :: Video",
+]
 dependencies = ["requests>=2.25"]
+
+[project.urls]
+Homepage = "https://github.com/DrSaeedHub/30nama-API"
+Documentation = "https://github.com/DrSaeedHub/30nama-API/blob/master/docs/API.md"
+Changelog = "https://github.com/DrSaeedHub/30nama-API/blob/master/CHANGELOG.md"
+Issues = "https://github.com/DrSaeedHub/30nama-API/issues"
 
 [project.optional-dependencies]
 test = ["pytest>=7", "httpx>=0.24"]
